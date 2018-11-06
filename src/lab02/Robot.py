@@ -258,11 +258,12 @@ class Robot:
                                 'nav_goal',
                                 "odom")
             except:
-                pass
+                continue
             try:
                 (self.trans, self.rotation) = self.tf_listener.lookupTransform('/base_footprint', '/nav_goal', rospy.Time(0))
             except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
                 continue
+
             self.target_first_turn = math.atan2(self.trans[1], self.trans[0])/math.pi*180
             self.target_dist = math.sqrt(self.trans[0] ** 2 + self.trans[1] ** 2)
 
