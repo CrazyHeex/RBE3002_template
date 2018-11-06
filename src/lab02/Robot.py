@@ -18,6 +18,8 @@ class Robot:
         self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
         self.targetX, self.targetY, self.targetR = 0, 0, 0
         self.nowX,self.nowY,self.nowR = 0,0,0
+        self.targetR_ = None
+        self.nav_goal = None
         self.twist_msg = Twist()
         self.basic_stop()
         self.tf_listener = tf.TransformListener()
@@ -123,12 +125,12 @@ class Robot:
 
     def turn_absolute_fix(self,target,mark):
 
-        print target,mark,'+++++'
+        # print target,mark,'+++++'
         if target < -180:
             target = 360 + target
         if target > 180:
             target = 360 - target
-        print target,mark,'+++++'
+        # print target,mark,'+++++'
         self.turn_absolute(target, mark)
 
 
@@ -137,8 +139,8 @@ class Robot:
         now = self.nowR
         target_at_range = self.get_range(target)
         now_at_range = self.get_range(now)
-        if target_at_range is None:
-            print target
+        # if target_at_range is None:
+        #     print target
         if now_at_range == target_at_range:
             if now < target:
                 case = 'cw   <=90'
@@ -214,12 +216,16 @@ class Robot:
 
 
     def nav_to_pose(self, goal):
+        self.nav_goal = goal
+        self.targetR_ = goal.pose.orientation
         self.targetX, self.targetY, self.targetR = self.translate_odom(goal)
-        i = []
-        for _ in range(10):
-            i.append((self.target_first_turn, self.target_dist))
-            self.rate.sleep()
-        print i.pop()
+
+        # i = []
+        # for _ in range(10):
+        #     i.append((self.target_first_turn, self.target_dist))
+        #     self.rate.sleep()
+        # print i.pop()
+        
         if not self.is_driving_curve:
             self.turn_absolute_fix(self.target_first_turn+self.nowR, self.nowR)
             self.driveStraight(self.target_dist)
@@ -227,16 +233,12 @@ class Robot:
         else:
             self.isArrived = False
             self.isArrived2 = False
+        rospy.loginfo("Phase 1")
 
 
 
     def odom_callback(self, odom):
         self.nowX, self.nowY, self.nowR = self.translate_odom(odom)
-        self.tf_broadcaster.sendTransform((self.targetX, self.targetY, 0),
-                         tf.transformations.quaternion_from_euler(0, 0, self.targetR),
-                         rospy.Time.now(),
-                         'nav_goal',
-                         "odom")
 
 
 
@@ -245,26 +247,46 @@ class Robot:
 
     def loop(self):
         while not rospy.is_shutdown():
+
+            try:
+
+                self.targetX, self.targetY, self.targetR = self.translate_odom(self.nav_goal)
+                x,y,z,w = self.targetR_.x, self.targetR_.y, self.targetR_.z, self.targetR_.w
+                self.tf_broadcaster.sendTransform((self.targetX, self.targetY, 0),
+                                (x, y, z, w),
+                                rospy.Time.now(),
+                                'nav_goal',
+                                "odom")
+            except:
+                pass
             try:
                 (self.trans, self.rotation) = self.tf_listener.lookupTransform('/base_footprint', '/nav_goal', rospy.Time(0))
             except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
                 continue
             self.target_first_turn = math.atan2(self.trans[1], self.trans[0])/math.pi*180
             self.target_dist = math.sqrt(self.trans[0] ** 2 + self.trans[1] ** 2)
-            if self.is_driving_curve:
+
+            rdiff = abs(self.targetR - self.nowR)
+            ldiff = self.target_dist
+
+
+            if self.is_driving_curve and not self.isArrived2:
+                
                 if self.isArrived:
                     
                     a = (self.targetR - self.nowR) / 100
                     l = 0 
-                    if a < 0.001 and self.target_dist < 0.005:
+                    # print rdiff
+                    if (rdiff < 0.05) and (ldiff < 0.05):
                         self.isArrived2 = True
                         a = 0
-                        print 'arrived2'
+
+                        rospy.loginfo("Phase 2 Done. Arrived at x: " + str(self.targetX) + ' y: ' + str(self.targetY) + ' r: ' + str(self.targetR)) 
                 else:
                     l = self.target_dist
                     a = self.target_first_turn /50
                     if l<0.005:
-                        print 'arrived'
+                        rospy.loginfo("Phase 1 Done, Start Phase 2")
                         self.isArrived = True
                         self.rate.sleep()
 
