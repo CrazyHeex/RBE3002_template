@@ -7,9 +7,10 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import tf
 
 
+
 class Robot:
     def __init__(self):
-        self.node = rospy.init_node('ZYang2_3002_Robot')
+        rospy.init_node('ZYang2_3002_Robot')
         self.rate = rospy.Rate(10)
         self.tf_broadcaster = tf.TransformBroadcaster()
         self.nav_subscriber = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.nav_to_pose)
@@ -24,9 +25,23 @@ class Robot:
         self.rotation = None
         self.target_dist = 0
         self.target_first_turn = 0
+        self.is_driving_curve=True
+        self.isArrived = True
+        self.isArrived2 = True
         self.loop()
 
     def update_twist(self, straight, turn):
+        turnlimit = math.pi/2
+        straightlimit = 1
+        if straight > 0.5:
+            straight = 0.5
+        if turn > turnlimit:
+            turn = turnlimit
+            straight = 0
+        if turn < -turnlimit:
+            turn = -turnlimit
+            straight = 0
+        # print straight,turn
         self.twist_msg.linear.x = float(straight)
         self.twist_msg.angular.z = float(turn)
         self.publisher.publish(self.twist_msg)
@@ -205,9 +220,13 @@ class Robot:
             i.append((self.target_first_turn, self.target_dist))
             self.rate.sleep()
         print i.pop()
-        self.turn_absolute_fix(self.target_first_turn+self.nowR, self.nowR)
-        self.driveStraight(self.target_dist)
-        self.turn_absolute_fix(self.targetR, self.nowR)
+        if not self.is_driving_curve:
+            self.turn_absolute_fix(self.target_first_turn+self.nowR, self.nowR)
+            self.driveStraight(self.target_dist)
+            self.turn_absolute_fix(self.targetR, self.nowR)
+        else:
+            self.isArrived = False
+            self.isArrived2 = False
 
 
 
@@ -221,6 +240,8 @@ class Robot:
 
 
 
+    def cap_curve_speed(self,linear,angular):
+        return linear, angular
 
     def loop(self):
         while not rospy.is_shutdown():
@@ -230,7 +251,24 @@ class Robot:
                 continue
             self.target_first_turn = math.atan2(self.trans[1], self.trans[0])/math.pi*180
             self.target_dist = math.sqrt(self.trans[0] ** 2 + self.trans[1] ** 2)
+            if self.is_driving_curve:
+                if self.isArrived:
+                    
+                    a = (self.targetR - self.nowR) / 100
+                    l = 0 
+                    if a < 0.001 and self.target_dist < 0.005:
+                        self.isArrived2 = True
+                        a = 0
+                        print 'arrived2'
+                else:
+                    l = self.target_dist
+                    a = self.target_first_turn /50
+                    if l<0.005:
+                        print 'arrived'
+                        self.isArrived = True
+                        self.rate.sleep()
 
+                self.update_twist(l,a)
             # print(self.target_first_turn, self.target_dist )
             self.rate.sleep()
 

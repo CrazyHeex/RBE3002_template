@@ -10,7 +10,6 @@
 
     <include file="$(find turtlebot3_gazebo)/launch/turtlebot3_gazebo_rviz.launch">
     </include>
-    <node pkg="rbe3002" type="Robot.py"
-          name="zyang2" />
+    <!-- <node pkg="rbe3002" type="Robot.py" name="zyang2" /> -->
   <!-- <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model" args="-urdf -model $(arg model) -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" /> -->
 </launch>
