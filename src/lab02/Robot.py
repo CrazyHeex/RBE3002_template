@@ -1,301 +1,264 @@
 #!/usr/bin/env python
 
-import rospy, math, threading
-from geometry_msgs.msg import Twist,PoseStamped
-from nav_msgs.msg import Odometry
+import rospy, math, tf2_ros, argparse
+from geometry_msgs.msg import Twist, PoseStamped, TransformStamped
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
-import tf
-
 
 
 class Robot:
-    def __init__(self):
+    def __init__(self, isDriveingCurve):
+        self.linear_max_speed =0.3
         rospy.init_node('ZYang2_3002_Robot')
-        self.rate = rospy.Rate(10)
-        self.tf_broadcaster = tf.TransformBroadcaster()
+        self.rate = rospy.Rate(50)
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster()
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.nav_subscriber = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.nav_to_pose)
-        self.nav_subscriber = rospy.Subscriber('/odom', Odometry, self.odom_callback)
-        self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
-        self.targetX, self.targetY, self.targetR = 0, 0, 0
-        self.nowX,self.nowY,self.nowR = 0,0,0
-        self.targetR_ = None
-        self.nav_goal = None
+        self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+        self.publisher_g = rospy.Publisher('/next_goal', TransformStamped, queue_size=10)
+        self.target_list = [('stop', 0.0)]
+        self.last_state = ''
+        self.l, self.a = 0.0, 0.0
         self.twist_msg = Twist()
-        self.basic_stop()
-        self.tf_listener = tf.TransformListener()
-        self.trans = None
-        self.rotation = None
-        self.target_dist = 0
-        self.target_first_turn = 0
-        self.is_driving_curve=True
-        self.isArrived = True
-        self.isArrived2 = True
-        self.loop()
+        self.isDriveingCurve = isDriveingCurve
+        while not rospy.is_shutdown():
+            self.loop()
 
-    def update_twist(self, straight, turn):
-        turnlimit = math.pi/2
-        straightlimit = 1
-        if straight > 0.5:
-            straight = 0.5
-        if turn > turnlimit:
-            turn = turnlimit
+    def update_twist(self):
+        straight = float(self.l)
+        turn = float(self.a)
+        turn_limit = math.pi / 2
+        straight_limit = self.linear_max_speed
+        if straight > straight_limit:  # cap the speed
+            straight = straight_limit
+        if turn > turn_limit:
+            turn = turn_limit
             straight = 0
-        if turn < -turnlimit:
-            turn = -turnlimit
+        if turn < -turn_limit:
+            turn = -turn_limit
             straight = 0
-        # print straight,turn
         self.twist_msg.linear.x = float(straight)
         self.twist_msg.angular.z = float(turn)
         self.publisher.publish(self.twist_msg)
 
-    def basic_Straight(self, speed):
-        self.update_twist(speed, 0)
-
-    def basic_Turn(self, speed):
-        self.update_twist(0, speed)
-
-    def basic_stop(self):
-        self.update_twist(0,0)
-        self.rate.sleep()
-
     def rotate(self, angle):
-        """
-        Rotate in place
-        :param angle: angle to rotate
-        :return:
-        """
-        mark = self.nowR
-        diff = (mark - angle)
-        self.turn_absolute_fix (diff,mark)
-
-    def driveStraight(self, distance):
-        self.drive(distance, (self.nowX, self.nowY))
-
-    def drive(self, distance, mark):
-        """
-        Rotate in place
-        :param angle: angle to rotate
-        :return:
-        """
-        isArrived = False
-        distance = float(distance)
-        xmark, ymark = mark
-        q = q = math.sqrt((self.nowX-xmark)**2+(self.nowY-ymark)**2)
-        if q < distance/2:
-            self.basic_Straight(((q / distance))/3  + 0.1)
-        elif (q < distance) :
-            self.basic_Straight((1 - ( q / distance))/3 + 0.05)
-        else:
-            isArrived = True
-            self.basic_stop()
-            rospy.loginfo("drived: "+str(round(distance,3)))
-        # print q,distance
-        self.rate.sleep()
-        if not isArrived:
-            self.drive(distance,mark)
-
-
-    def in_range(self, range, num):
-        return (num >= min(range)) and (num <= max(range))
-
-    def get_range(self, num):
-        num = int(num)
-        if self.in_range([0, 90], num):
-            return 4
-        elif self.in_range([90, 180], num):
-            return 3
-        elif self.in_range([0, -90], num):
-            return 1
-        elif self.in_range([-180, -90], num):
-            return 2
-
-    def get_range_nav(self, x, y):
-        if x == 0:
-            x += 0.000000001
-        if y == 0:
-            y += 0.000000001
-        if x > 0 and y > 0:
-            return 4
-        elif x > 0 and y < 0:
-            return 1
-        elif x < 0 and y > 0:
-            return 3
-        elif x < 0 and y < 0:
-            return 2
-
-    def turn_absolute_fix(self,target,mark):
-
-        # print target,mark,'+++++'
-        if target < -180:
-            target = 360 + target
-        if target > 180:
-            target = 360 - target
-        # print target,mark,'+++++'
-        self.turn_absolute(target, mark)
-
-
-    def turn_absolute(self, target, mark):
-        isArrived = False
-        now = self.nowR
-        target_at_range = self.get_range(target)
-        now_at_range = self.get_range(now)
-        # if target_at_range is None:
-        #     print target
-        if now_at_range == target_at_range:
-            if now < target:
-                case = 'cw   <=90'
-            else:
-                case = 'ccw  <=90'
-
-            if abs(now-target)<0.005:
-                self.basic_stop()
-                isArrived = True
-                rospy.loginfo("turned: "+str(round(mark - target,3)))
-
-        elif (abs(now_at_range - target_at_range) == 1) or (abs(now_at_range - target_at_range) == 3): #adj
-            if now_at_range == 4 and target_at_range == 1:
-                case = 'ccw   adj jump'
-            elif now_at_range == 1 and target_at_range == 4:
-                case = 'cw  adj jump'
-            else:
-                if now_at_range < target_at_range:
-                    case = 'ccw adj'
-                else:
-                    case = 'cw  adj'
-        else:
-            i = abs(abs(now)+abs(target))
-            if i < 180:
-                case = 'cw   not adj'
-            else:
-                case = 'ccw  not adj'
-
-        if not isArrived:
-            if case[1] == 'w':
-                if case[5] == '<':
-                    self.basic_Turn(abs(now - target)/30 + 0.003)
-                    # print(abs(now - target)/30 + 0.3, now)
-                elif case[5] == 'a':
-                    self.basic_Turn(abs(now - target)/50)
-                else:
-                    self.basic_Turn(abs(now - target)/50)
-            elif case[1] == 'c':
-                if case[5] == '<':
-                    self.basic_Turn(-abs(now - target)/30 - 0.03)
-                    # print(abs(now - target)/30 + 0.3, now)
-                elif case[5] == 'a':
-                    self.basic_Turn(-abs(now - target)/50)
-                else:
-                    self.basic_Turn(-abs(now - target)/50)
-
-            self.rate.sleep()
-            self.turn_absolute(target, mark)
-
-
-    def translate_odom(self, odom):
+        # angle = angle / 180 * math.pi
         try:
-            x = odom.pose.pose.position.x
-            y = odom.pose.pose.position.y
-            _, _, r = euler_from_quaternion([odom.pose.pose.orientation.x,odom.pose.pose.orientation.y,odom.pose.pose.orientation.z,odom.pose.pose.orientation.w])
+            next_goal = self.tf_buffer.lookup_transform('odom', 'base_footprint', rospy.Time())
+            # rot = quaternion_from_euler(0, 0, angle)
+            rot = euler_from_quaternion(
+                [next_goal.transform.rotation.x, next_goal.transform.rotation.y, next_goal.transform.rotation.z,
+                 next_goal.transform.rotation.w])
+
+            rot1 = []
+            rot1.append(rot[0])
+            rot1.append(rot[1])
+            rot1.append(rot[2] + angle)
+            print rot1
+            rr = quaternion_from_euler(rot1[0], rot1[1], rot1[2])
+            next_goal.transform.rotation.x = rr[0]
+            next_goal.transform.rotation.y = rr[1]
+            next_goal.transform.rotation.z = rr[2]
+            next_goal.transform.rotation.w = rr[3]
+
+            self.publisher_g.publish(next_goal)
+            self.rate.sleep()
+
+        except Exception as e:
+            print 'rotate: ', e
+            pass
+
+        pass
+
+    def rotate_absolute(self, angle):
+        # angle = angle / 180 * math.pi
+        try:
+            next_goal = self.tf_buffer.lookup_transform('odom', 'base_footprint', rospy.Time())
+            next_goal1 = self.tf_buffer.lookup_transform('base_footprint', 'odom', rospy.Time())
+            # rot = quaternion_from_euler(0, 0, angle)
+            rot = euler_from_quaternion(
+                [next_goal.transform.rotation.x, next_goal.transform.rotation.y, next_goal.transform.rotation.z,
+                 next_goal.transform.rotation.w])
+            rot1 = euler_from_quaternion(
+                [next_goal1.transform.rotation.x, next_goal1.transform.rotation.y, next_goal1.transform.rotation.z,
+                 next_goal1.transform.rotation.w])
+
+            rot2 = []
+            rot2.append(rot[0]+rot1[0])
+            rot2.append(rot[1]+rot1[1])
+            rot2.append(rot[2]+rot1[2] + angle)
+
+            rr = quaternion_from_euler(rot2[0], rot2[1], rot2[2])
+            next_goal.transform.rotation.x = rr[0]
+            next_goal.transform.rotation.y = rr[1]
+            next_goal.transform.rotation.z = rr[2]
+            next_goal.transform.rotation.w = rr[3]
+
+            self.publisher_g.publish(next_goal)
+            self.rate.sleep()
+
+        except Exception as e:
+            print 'rotate: ', e
+            pass
+
+        pass
+
+    def drive(self, distance):
+        self.rate.sleep()
+        pass
+
+    def nav_to_pose(self, msg):
+        self.target_list=[('stop',0.0)]
+        try:
+            buffer = []
+            for i in range(10):
+                buffer.append(self.tf_buffer.lookup_transform('base_footprint', 'nav_goal',
+                                                              rospy.Time(0)))
+                self.rate.sleep()
+            trans = buffer.pop()
+            target_first_turn = math.atan2(trans.transform.translation.y,
+                                           trans.transform.translation.x)
+
+            target_drive = math.sqrt(trans.transform.translation.x**2 + trans.transform.translation.y**2)
+
+            _, _, target_second_turn = euler_from_quaternion(
+                [msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
+            self.target_list.append(('stop', 0.0))
+            self.target_list.append(('rotate_absolute', target_second_turn))
+            self.target_list.append(('stop', 0.0))
+            if self.isDriveingCurve:
+                self.target_list.append(('drive_curve', 'nav_goal'))
+            else:
+                self.target_list.append(('drive', target_drive))
+                self.target_list.append(('stop', 0.0))
+                self.target_list.append(('rotate', target_first_turn))
+                self.target_list.append(('stop', 0.0))
+
         except:
-            x = odom.pose.position.x
-            y = odom.pose.position.y
-            _, _, r = euler_from_quaternion([odom.pose.orientation.x,odom.pose.orientation.y,odom.pose.orientation.z,odom.pose.orientation.w])
-        r = r/math.pi*180
-        return x, y, r
+            pass
+
+        pass
+
+    def do_target_list(self):
+        try:
+            (current_mode, parameter) = self.target_list[len(self.target_list) - 1]
+
+            if current_mode == 'stop':
+                print 'stop'
+                self.l = 0.0
+                self.a = 0.0
+                self.target_list.pop()
+
+            if current_mode == 'rotate':
+                if self.last_state != current_mode:
+                    print 'update rot'
+                    self.rotate(parameter)
+                    self.rate.sleep()
+                try:
+                    trans = self.tf_buffer.lookup_transform('base_footprint', 'dummy', rospy.Time())
+                    _, _, self.a = euler_from_quaternion(
+                        [trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z,
+                         trans.transform.rotation.w])
+                    self.l = 0.0
+                except Exception as e:
+                    print e
+                    pass
+                if abs(self.a) < 0.05 and (self.last_state == current_mode):
+                    self.target_list.pop()
+                    self.l = 0
+                    self.a = 0
+                    print 'finish turn', parameter
 
 
-    def translate_tf(self, tf):
+            if current_mode == 'rotate_absolute':
+                if self.last_state != current_mode:
+                    print 'update rot'
+                    self.rotate_absolute(parameter)
+                    self.rate.sleep()
+                try:
+                    trans = self.tf_buffer.lookup_transform('base_footprint', 'dummy', rospy.Time())
+                    _, _, self.a = euler_from_quaternion(
+                        [trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z,
+                         trans.transform.rotation.w])
+                    self.l = 0.0
+                except Exception as e:
+                    print e
+                    pass
+                if abs(self.a) < 0.05 and (self.last_state == current_mode):
+                    self.target_list.pop()
+                    self.l = 0
+                    self.a = 0
+                    print 'finish turn_a', parameter
 
-        x = tf[0][0]
-        y = tf[0][1]
-        _, _, r = euler_from_quaternion(tf[1])
+            if current_mode == 'drive':
+                if self.last_state != current_mode:
+                    self.drive(parameter)
+                    self.rate.sleep()
 
-        r = r/math.pi*180
-        return x, y, r
+                try:
+                    trans = self.tf_buffer.lookup_transform('base_footprint', 'dummy', rospy.Time())
+                    self.l = parameter - math.sqrt(trans.transform.translation.x**2 + trans.transform.translation.y**2)
 
+                    print '>>>',self.l
+                except Exception as e:
+                    print e
+                    pass
 
-
-    def nav_to_pose(self, goal):
-        self.nav_goal = goal
-        self.targetR_ = goal.pose.orientation
-        self.targetX, self.targetY, self.targetR = self.translate_odom(goal)
-
-        # i = []
-        # for _ in range(10):
-        #     i.append((self.target_first_turn, self.target_dist))
-        #     self.rate.sleep()
-        # print i.pop()
-        
-        if not self.is_driving_curve:
-            self.turn_absolute_fix(self.target_first_turn+self.nowR, self.nowR)
-            self.driveStraight(self.target_dist)
-            self.turn_absolute_fix(self.targetR, self.nowR)
-        else:
-            self.isArrived = False
-            self.isArrived2 = False
-        rospy.loginfo("Phase 1")
+                if self.l > self.linear_max_speed:
+                    self.l = self.linear_max_speed/self.l
+                print self.l
+                if self.l < 0.05:
+                    self.target_list.pop()
+                pass
 
 
 
-    def odom_callback(self, odom):
-        self.nowX, self.nowY, self.nowR = self.translate_odom(odom)
+            if current_mode == 'drive_curve':
+                if self.last_state != current_mode:
+                    self.rate.sleep()
+
+                try:
+                    buffer = []
+                    for i in range(10):
+                        buffer.append(self.tf_buffer.lookup_transform('base_footprint', parameter, rospy.Time()))
+                    trans = buffer.pop()
 
 
+                    self.l = math.sqrt(trans.transform.translation.x**2 + trans.transform.translation.y**2)
+                    self.a = math.atan2(trans.transform.translation.y,trans.transform.translation.x)
 
-    def cap_curve_speed(self,linear,angular):
-        return linear, angular
+
+                    print '>>>',self.l
+                except Exception as e:
+                    print e
+                    pass
+
+                if self.l > self.linear_max_speed:
+                    self.l = self.linear_max_speed/self.l
+                print self.l
+                if self.l < 0.01:
+                    self.target_list.pop()
+                pass
+
+            self.last_state = current_mode
+        except:
+            pass
+
+        self.rate.sleep()
 
     def loop(self):
-        while not rospy.is_shutdown():
-
-            try:
-
-                self.targetX, self.targetY, self.targetR = self.translate_odom(self.nav_goal)
-                x,y,z,w = self.targetR_.x, self.targetR_.y, self.targetR_.z, self.targetR_.w
-                self.tf_broadcaster.sendTransform((self.targetX, self.targetY, 0),
-                                (x, y, z, w),
-                                rospy.Time.now(),
-                                'nav_goal',
-                                "odom")
-            except:
-                continue
-            try:
-                (self.trans, self.rotation) = self.tf_listener.lookupTransform('/base_footprint', '/nav_goal', rospy.Time(0))
-            except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-                continue
-
-            self.target_first_turn = math.atan2(self.trans[1], self.trans[0])/math.pi*180
-            self.target_dist = math.sqrt(self.trans[0] ** 2 + self.trans[1] ** 2)
-
-            rdiff = abs(self.targetR - self.nowR)
-            ldiff = self.target_dist
-
-
-            if self.is_driving_curve and not self.isArrived2:
-                
-                if self.isArrived:
-                    
-                    a = (self.targetR - self.nowR) / 100
-                    l = 0 
-                    # print rdiff
-                    if (rdiff < 0.05) and (ldiff < 0.05):
-                        self.isArrived2 = True
-                        a = 0
-
-                        rospy.loginfo("Phase 2 Done. Arrived at x: " + str(self.targetX) + ' y: ' + str(self.targetY) + ' r: ' + str(self.targetR)) 
-                else:
-                    l = self.target_dist
-                    a = self.target_first_turn /50
-                    if l<0.005:
-                        rospy.loginfo("Phase 1 Done, Start Phase 2")
-                        self.isArrived = True
-                        self.rate.sleep()
-
-                self.update_twist(l,a)
-            # print(self.target_first_turn, self.target_dist )
-            self.rate.sleep()
-
+        self.do_target_list()
+        self.update_twist()
+        self.rate.sleep()
 
 
 if __name__ == '__main__':
-    robot = Robot()
+
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("curve", help="curve driving enabled", type=int)
+    # args = parser.parse_args()
+    # print args.curve
+    # if args.curve == 1:
+    robot = Robot(True)
+    # else:
+    #     robot = Robot(False)
