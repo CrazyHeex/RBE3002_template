@@ -3,23 +3,19 @@
 import rospy, tf2_ros, math
 
 import numpy as np
-
-from geometry_msgs.msg  import TransformStamped, PoseStamped,Point
+from geometry_msgs.msg  import TransformStamped, Point
 from  nav_msgs.msg import GridCells, OccupancyGrid
-
-
-
 
 class Map_handler:
     def __init__(self):
         rospy.init_node('ZYang2_3002_map')
-        self.rate = rospy.Rate(100)
+        self.rate = rospy.Rate(10)
 
         self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
         self.tf_broadcaster = tf2_ros.TransformBroadcaster()
-        self.nav_subscriber = rospy.Subscriber('/map', OccupancyGrid, self.map)
-        self.nav_subscriber = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.nav_goal)
+        self.nav_subscriber = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.mod_map = rospy.Publisher('/mm', GridCells, queue_size=10)
 
         self.map = None
@@ -30,9 +26,11 @@ class Map_handler:
         self.map_dummy.cells = []
         self.map_trans = TransformStamped()
         self.map_trans.transform.rotation.w = 1.0
-
+        self.now_grid = [0, 0]
+        self.goal_grid = [0, 0]
         self.h_matrix = None
         self.g_matrix = None
+
 
         while not rospy.is_shutdown():
             if self.map is not None:
@@ -44,26 +42,29 @@ class Map_handler:
 
                     self.mod_map.publish(self.map_dummy)
 
+
                 except Exception as e:
                     print e
                     self.rate.sleep()
                     continue
 
+            try:
+                self.update_now_grid()
+                self.update_goal_grid()
+            except Exception as e:
+                print e
+
             self.rate.sleep()
 
-
-
-
-
-
-    def map(self, msg):
+    def map_callback(self, msg):
         self.map = msg
         self.map_trans.transform.translation = msg.info.origin.position
         self.map_trans.transform.rotation = msg.info.origin.orientation
 
         m = np.array(msg.data)
         m = np.reshape(m,(int(math.sqrt(len(msg.data))), int(math.sqrt(len(msg.data)))))
-        print m
+
+
 
         self.map_dummy.header.frame_id = 'odom'
         self.map_dummy.cell_height = msg.info.resolution
@@ -80,34 +81,14 @@ class Map_handler:
                     p.z = 0.0
                     self.map_dummy.cells.append(p)
 
+    def update_now_grid(self):
+        trans = self.tf_buffer.lookup_transform('odom', 'base_footprint', rospy.Time())
+        self.now_grid = [ int (trans.transform.translation.x/self.map.info.resolution), int(trans.transform.translation.y/self.map.info.resolution)]
 
-
-
-    def nav_goal(self, msg):
-        # cells = []
-        # self.map_dummy.header.stamp = rospy.Time.now()
-        # try:
-        #     # trans = self.tf_buffer.lookup_transform('nav_goal', 'map', rospy.Time.now())
-        #
-        #     p = Point()
-        #     p.x = msg.pose.position.x
-        #     p.y = msg.pose.position.y
-        #     p.z = 0.0
-        #     cells.append(p)
-        #     print cells,'<<<<<<<<<<<<<<<<'
-        #     self.map_dummy.cells = cells
-        #
-        # except Exception as e:
-        #     print 'nav_goal: ', e
-        # # self.dummy_trans = msg
-        pass
-
-
-    def update_heuristic(self):
-        pass
-
-    def update_cost(self):
-        pass
+    def update_goal_grid(self):
+        trans = self.tf_buffer.lookup_transform('odom', 'nav_goal', rospy.Time())
+        self.goal_grid = [ int (trans.transform.translation.x/self.map.info.resolution), int(trans.transform.translation.y/self.map.info.resolution)]
+        print self.goal_grid
 
 
 if __name__ == '__main__':
