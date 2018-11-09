@@ -15,7 +15,7 @@ class Robot:
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.nav_subscriber = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.nav_to_pose)
         self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
-        self.publisher_g = rospy.Publisher('/next_goal', TransformStamped, queue_size=10)
+        self.publisher_g = rospy.Publisher('/zyang/next_goal_dummy', TransformStamped, queue_size=10)
         self.target_list = [('stop', 0.0)]
         self.last_state = ''
         self.l, self.a = 0.0, 0.0
