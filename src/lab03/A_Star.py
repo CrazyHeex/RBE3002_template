@@ -74,8 +74,8 @@ class A_Star:
             :param goal: starting value
             :param came_from: dictionary of tuples
             :return: list of tuples
-       """
-       pass
+        """
+        pass
   
 
     def optimize_path(self, path):

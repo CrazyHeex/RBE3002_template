@@ -1,12 +1,15 @@
 #!/usr/bin/env python
 
-import rospy, tf2_ros, math
+import rospy
+import tf2_ros
+import math
 
 import numpy as np
-from geometry_msgs.msg  import TransformStamped, Point
-from  nav_msgs.msg import GridCells, OccupancyGrid
+from geometry_msgs.msg import TransformStamped, Point
+from nav_msgs.msg import GridCells, OccupancyGrid
 
-class Map_handler:
+
+class MapHandler:
     def __init__(self):
         rospy.init_node('ZYang2_3002_map')
         self.rate = rospy.Rate(10)
@@ -31,7 +34,6 @@ class Map_handler:
         self.h_matrix = None
         self.g_matrix = None
 
-
         while not rospy.is_shutdown():
             if self.map is not None:
                 try:
@@ -41,7 +43,6 @@ class Map_handler:
                     self.tf_broadcaster.sendTransform(self.map_trans)
 
                     self.mod_map.publish(self.map_dummy)
-
 
                 except Exception as e:
                     print e
@@ -62,9 +63,7 @@ class Map_handler:
         self.map_trans.transform.rotation = msg.info.origin.orientation
 
         m = np.array(msg.data)
-        m = np.reshape(m,(int(math.sqrt(len(msg.data))), int(math.sqrt(len(msg.data)))))
-
-
+        m = np.reshape(m, (int(math.sqrt(len(msg.data))), int(math.sqrt(len(msg.data)))))
 
         self.map_dummy.header.frame_id = 'odom'
         self.map_dummy.cell_height = msg.info.resolution
@@ -74,22 +73,24 @@ class Map_handler:
 
         for h in range(msg.info.height):
             for w in range(msg.info.width):
-                if  m[h][w] == 0:
+                if m[h][w] == 0:
                     p = Point()
-                    p.x = w * msg.info.resolution + msg.info.resolution/2
-                    p.y = h * msg.info.resolution + msg.info.resolution/2
+                    p.x = w * msg.info.resolution + msg.info.resolution / 2
+                    p.y = h * msg.info.resolution + msg.info.resolution / 2
                     p.z = 0.0
                     self.map_dummy.cells.append(p)
 
     def update_now_grid(self):
         trans = self.tf_buffer.lookup_transform('odom', 'base_footprint', rospy.Time())
-        self.now_grid = [ int (trans.transform.translation.x/self.map.info.resolution), int(trans.transform.translation.y/self.map.info.resolution)]
+        self.now_grid = [int(trans.transform.translation.x / self.map.info.resolution),
+                         int(trans.transform.translation.y / self.map.info.resolution)]
 
     def update_goal_grid(self):
         trans = self.tf_buffer.lookup_transform('odom', 'nav_goal', rospy.Time())
-        self.goal_grid = [ int (trans.transform.translation.x/self.map.info.resolution), int(trans.transform.translation.y/self.map.info.resolution)]
+        self.goal_grid = [int(trans.transform.translation.x / self.map.info.resolution),
+                          int(trans.transform.translation.y / self.map.info.resolution)]
         print self.goal_grid
 
 
 if __name__ == '__main__':
-    dummy = Map_handler()
+    dummy = MapHandler()
